@@ -13,6 +13,19 @@ FIRST_CAP_RE = re.compile('(.)([A-Z][a-z]+)')
 ALL_CAP_RE = re.compile('([a-z0-9])([A-Z])')
 
 
+def convert_date(date):
+    if not date:
+        return date
+
+    if not isinstance(date, basestring):
+        try:
+            return date.strftime('%Y%m%d')
+        except:
+            pass
+
+    return date
+
+
 def require_login(f):
 
     @functools.wraps(f)
@@ -157,6 +170,7 @@ class Client(object):
             kwargs['Symbols'] = ','.join(symbols)
 
         if date is not None:
+            date = convert_date(date)
             method = 'QuoteListByDate'
             kwargs['QuoteDate'] = date
 
@@ -170,7 +184,8 @@ class Client(object):
     @require_login
     def history(self, exchange, symbol, start, end=None, period=None):
         method = 'SymbolHistory'
-        kwargs = {'Exchange': exchange, 'Symbol': symbol, 'StartDate': start}
+        kwargs = {'Exchange': exchange, 'Symbol': symbol,
+                  'StartDate': convert_date(start)}
 
         # NOTE(jkoelker) Consistancy much?
         if period is not None:
@@ -178,11 +193,12 @@ class Client(object):
 
             if end is None:
                 method = 'SymbolHistoryPeriod'
-                kwargs['Date'] = start
+                kwargs['Date'] = convert_date(start)
 
             else:
                 method = 'SymbolHistoryPeriodByDateRange'
-                kwargs['EndDate'] = start
+                kwargs['EndDate'] = convert_date(end)
+
         elif end is not None:
             raise TypeError("'period' must be specified with 'end'")
 
