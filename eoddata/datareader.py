@@ -3,9 +3,18 @@
 import os
 
 import pandas as pd
+import pytz
+from tzlocal import windows_tz
 
 import appdirs
 import ws
+
+
+_TYPE_MAP = {'integer': int,
+             'unicode': str,
+             'string': str,
+             'boolean': bool,
+             'datetime': 'M8[ns]'}
 
 
 def file_name(name, format):
@@ -25,28 +34,53 @@ def get_file(name, expiration=None):
     return name
 
 
-def ununicode(data):
+def cleanup(data):
     types = data.apply(lambda x: pd.lib.infer_dtype(x.values))
 
-    for col in types[types == 'unicode'].index:
-        data[col] = data[col].astype(str)
+    for type_name, type_type in _TYPE_MAP.iteritems():
+        for col in types[types == type_name].index:
+            print "Col %s -> %s (%s)" % (col, type_name, str(type_type))
+            data[col] = data[col].astype(type_type)
 
     return data
+
+
+def timetastic(ts, tz=None):
+    ts = pd.to_datetime(ts)
+
+    if tz is not None and (not hasattr(ts, 'tzinfo') or ts.tzinfo is None):
+        ts = ts.tz_localize(tz)
+
+    return ts
 
 
 class Manager(object):
     def __init__(self, client):
         self.client = client
 
+    def _exchange_tz(self, exchange, exchanges=None):
+        # NOTE(jkoelker) EODData's service is windows based, convert times here
+        if exchanges is None:
+            exchanges = self.exchanges()
+        exchange_tz = exchanges[exchange]['time_zone']
+        return pytz.timezone(windows_tz.tz_names[exchange_tz])
+
     def exchanges(self, expiration='1d'):
-        return pd.DataFrame(self.client.exchanges())
+        exchanges = self.client.exchanges()
+        for exchange in exchanges:
+            exchange_tz = self._exchange_tz(exchange, exchanges=exchanges)
+            for col in ('intraday_start_date', 'last_trade_date_time'):
+                exchanges[exchange][col] = timetastic(exchanges[exchange][col],
+                                                      tz=exchange_tz)
+        return pd.DataFrame(exchanges)
 
     def symbols(self, exchange, expiration='1d'):
         return pd.DataFrame(self.client.symbols(exchange))
 
     def history(self, exchange, symbol, start, end=None, period='d'):
-        start = pd.core.datetools.to_datetime(start)
-        end = pd.core.datetools.to_datetime(end)
+        tz = self._exchange_tz(exchange)
+        start = timetastic(start, tz)
+        end = timetastic(end, tz)
 
         history = self.client.history(exchange, symbol, start, end, period)
         history = pd.DataFrame.from_records(history, index='date_time')
@@ -54,6 +88,8 @@ class Manager(object):
         # NOTE(jkoelker) Sometimes we'll get an extra period back
         if end is not None:
             history = history[history.index <= end]
+
+        history.index = history.index.tz_localize(tz)
 
         return history
 
@@ -78,126 +114,91 @@ class CacheManager(Manager):
             os.makedirs(self.directory)
 
 
-class HDFCache(CacheManager):
-    def __init__(self, *args, **kwargs):
-        CacheManager.__init__(self, *args, **kwargs)
-        self._store_kwargs = {'path': os.path.join(self.directory,
-                                                   'eoddata.h5'),
-                              'complevel': kwargs.get('complevel', 9),
-                              'complib': kwargs.get('complib', 'blosc'),
-                              'fletcher32': kwargs.get('fletcher32', True)}
-        self.store = pd.HDFStore(**self._store_kwargs)
+class PickleCache(CacheManager):
+    @staticmethod
+    def _get_key(*parts):
+        return '/'.join(parts)
 
-    def _update_insert_time(self, key):
-        series = pd.Series({key: pd.datetime.now()})
+    def _get_file(self, key, create=True):
+        filename = '.'.join(('/'.join((self.directory, key)), 'pkl'))
 
-        if 'insert_time' in self.store:
-            insert_time = self.store['insert_time']
-            if key in insert_time:
-                insert_time[key] = series[key]
+        if create:
+            path = os.path.dirname(filename)
+            if not os.path.exists(path):
+                os.makedirs(path)
 
-            else:
-                insert_time = insert_time.append(series)
-        else:
-            insert_time = series
-
-        self.store['insert_time'] = insert_time
+        return filename
 
     def _can_haz_cache(self, key, expiration=None):
-        if key not in self.store:
+        filename = self._get_file(key)
+        if not os.path.exists(filename):
             return False
 
         if expiration is None:
             return True
 
-        if 'insert_time' in self.store:
-            insert_time = self.store['insert_time']
-
-            if key not in insert_time:
-                return False
-
-            expiration = pd.core.datetools.to_offset(expiration)
-            if (pd.datetime.now() - insert_time[key]) < expiration:
-                return True
-
-        return False
-
-    @staticmethod
-    def _get_key(*parts):
-        return '/'.join(parts)
-
-    @property
-    def is_open(self):
-        if self.store._handle is not None and self.store._handle.isopen:
+        mtime = pd.to_datetime(os.path.getmtime(filename), unit='s')
+        expiration = pd.core.datetools.to_offset(expiration)
+        if (pd.datetime.now() - mtime) < expiration:
             return True
+
         return False
 
     def exchanges(self, expiration='1d'):
-        if not self.is_open:
-            self.store.open()
+        key = 'exchanges'
+        filename = self._get_file(key)
 
-        if self._can_haz_cache('exchanges', expiration):
-            return self.store['exchanges']
+        if self._can_haz_cache(key, expiration):
+            return pd.read_pickle(filename)
 
         exchanges = CacheManager.exchanges(self, expiration)
-        exchanges = ununicode(exchanges)
-        self.store['exchanges'] = exchanges
+        exchanges.to_pickle(filename)
         return exchanges
 
     # TODO(jkoelker) handle rename/delisting and the like
     def symbols(self, exchange, expiration='1d'):
-        if not self.is_open:
-            self.store.open()
-
         key = self._get_key('symbols', exchange)
+        filename = self._get_file(key)
+
         if self._can_haz_cache(key, expiration):
-            return self.store[key]
+            return pd.read_pickle(filename)
 
         symbols = CacheManager.symbols(self, exchange, expiration)
-        symbols = ununicode(symbols)
-        self.store[key] = symbols
+        symbols.to_pickle(filename)
         return symbols
 
     def _history(self, exchange, symbol, start, end=None, period='d'):
-        history = CacheManager.history(self, exchange, symbol, start, end,
-                                       period)
-        return ununicode(history)
+        return CacheManager.history(self, exchange, symbol, start, end, period)
 
     def history(self, exchange, symbol, start, end=None, period='d'):
-        start = pd.core.datetools.to_datetime(start)
-        end = pd.core.datetools.to_datetime(end)
+        tz = self._exchange_tz(exchange)
+        start = timetastic(start, tz)
+        end = timetastic(end, tz)
 
-        if not self.is_open:
-            self.store.open()
-
-        key = self._get_key('history', exchange, symbol, period)
+        period_key = 'period_%s' % period
+        key = self._get_key('history', exchange, symbol, period_key)
+        filename = self._get_file(key)
 
         if not self._can_haz_cache(key):
             history = self._history(exchange, symbol, start, end, period)
 
-            if key not in self.store:
-                self.store.append(key, history)
+            if os.path.exists(filename):
+                cached_history = pd.read_pickle(filename)
+                cached_history.combined(history).to_pickle(filename)
 
             else:
-                terms = [pd.Term('index', '>=', start)]
-
-                if end is not None:
-                    terms.append(pd.Term('index', '<=', end))
-
-                cached_history = self.store.select(key, terms)
-                criteria = ~history.index.isin(cached_history.index)
-                new_history = history.ix[criteria]
-
-                self.store.append(key, new_history)
+                history.to_pickle(filename)
 
             return history
 
-        terms = [pd.Term('index', '>=', start)]
+        cached_history = pd.read_pickle(filename)
 
-        if end is not None:
-            terms.append(pd.Term('index', '<=', end))
+        if end is None:
+            now = timetastic(pd.datetime.now(), tz)
+            history = cached_history.ix[start:now]
 
-        history = self.store.select(key, terms)
+        else:
+            history = cached_history.ix[start:end]
 
         if history:
 
@@ -210,20 +211,10 @@ class HDFCache(CacheManager):
             new_history = new_history[new_history.index > last_record]
 
             if new_history:
-                self.store.append(key, new_history)
-                history = history.append(new_history)
+                cached_history.combined(new_history).to_pickle(filename)
+                history = history.combines(new_history)
 
-            return history
-
-        history = self._history(exchange, symbol, start, end, period)
-        self.store.append(key, history)
         return history
-
-    def open(self, *args, **kwargs):
-        return self.store.open(*args, **kwargs)
-
-    def close(self, *args, **kwargs):
-        return self.store.close(*args, **kwargs)
 
 
 class DataReader(object):
@@ -234,7 +225,7 @@ class DataReader(object):
         if not cache:
             self.datasource = Manager(client)
         elif cache is True:
-            self.datasource = HDFCache(client)
+            self.datasource = PickleCache(client)
         else:
             self.datasource = cache
 
