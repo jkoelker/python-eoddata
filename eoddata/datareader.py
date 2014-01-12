@@ -39,7 +39,6 @@ def cleanup(data):
 
     for type_name, type_type in _TYPE_MAP.iteritems():
         for col in types[types == type_name].index:
-            print "Col %s -> %s (%s)" % (col, type_name, str(type_type))
             data[col] = data[col].astype(type_type)
 
     return data
@@ -58,7 +57,7 @@ class Manager(object):
     def __init__(self, client):
         self.client = client
 
-    def _exchange_tz(self, exchange, exchanges=None):
+    def exchange_tz(self, exchange, exchanges=None):
         # NOTE(jkoelker) EODData's service is windows based, convert times here
         if exchanges is None:
             exchanges = self.exchanges()
@@ -68,7 +67,7 @@ class Manager(object):
     def exchanges(self, expiration='1d'):
         exchanges = self.client.exchanges()
         for exchange in exchanges:
-            exchange_tz = self._exchange_tz(exchange, exchanges=exchanges)
+            exchange_tz = self.exchange_tz(exchange, exchanges=exchanges)
             for col in ('intraday_start_date', 'last_trade_date_time'):
                 exchanges[exchange][col] = timetastic(exchanges[exchange][col],
                                                       tz=exchange_tz)
@@ -78,7 +77,7 @@ class Manager(object):
         return pd.DataFrame(self.client.symbols(exchange))
 
     def history(self, exchange, symbol, start, end=None, period='d'):
-        tz = self._exchange_tz(exchange)
+        tz = self.exchange_tz(exchange)
         start = timetastic(start, tz)
         end = timetastic(end, tz)
 
@@ -139,7 +138,7 @@ class PickleCache(CacheManager):
 
         mtime = pd.to_datetime(os.path.getmtime(filename), unit='s')
         expiration = pd.core.datetools.to_offset(expiration)
-        if (pd.datetime.now() - mtime) < expiration:
+        if (pd.datetime.now() - mtime) < expiration.delta:
             return True
 
         return False
@@ -171,7 +170,7 @@ class PickleCache(CacheManager):
         return CacheManager.history(self, exchange, symbol, start, end, period)
 
     def history(self, exchange, symbol, start, end=None, period='d'):
-        tz = self._exchange_tz(exchange)
+        tz = self.exchange_tz(exchange)
         start = timetastic(start, tz)
         end = timetastic(end, tz)
 
@@ -184,7 +183,7 @@ class PickleCache(CacheManager):
 
             if os.path.exists(filename):
                 cached_history = pd.read_pickle(filename)
-                cached_history.combined(history).to_pickle(filename)
+                cached_history.combine_first(history).to_pickle(filename)
 
             else:
                 history.to_pickle(filename)
@@ -198,21 +197,34 @@ class PickleCache(CacheManager):
             history = cached_history.ix[start:now]
 
         else:
-            history = cached_history.ix[start:end]
+            # NOTE(jkoelker) String date indexing allows any time on the date
+            history = cached_history.ix[str(start):str(end.date())]
 
         if history:
-
+            first_record = history.index[0]
             last_record = history.index[-1]
 
-            if end is not None and last_record < end:
-                start = last_record
+            # TODO(jkoelker) handle missing intraday data
+            if start.date() < first_record.date():
+                new_history = self._history(exchange, symbol, start,
+                                            first_record, period)
+                cached_history = cached_history.combine_first(new_history)
+                cached_history.to_pickle(filename)
 
-            new_history = self._history(exchange, symbol, start, end, period)
-            new_history = new_history[new_history.index > last_record]
+                history = history.combine_first(new_history)
 
-            if new_history:
-                cached_history.combined(new_history).to_pickle(filename)
-                history = history.combines(new_history)
+            if end is None:
+                search_end = timetastic(pd.datetime.now(), tz)
+
+            else:
+                search_end = end
+
+            if last_record.date() < search_end.date():
+                new_history = self._history(exchange, symbol, last_record,
+                                            search_end, period)
+                cached_history = cached_history.combine_first(new_history)
+                cached_history.to_pickle(filename)
+                history = history.combine_first(new_history)
 
         return history
 
@@ -229,5 +241,16 @@ class DataReader(object):
         else:
             self.datasource = cache
 
-    def __call__(self, exchange, symbol, start, end=None, period='d'):
-        return self.datasource.history(exchange, symbol, start, end, period)
+    def __call__(self, exchange, symbol, start, end=None, period='d',
+                 full_history=True):
+        tz = self.datasource.exchange_tz(exchange)
+        start = timetastic(start, tz)
+        end = timetastic(end, tz)
+
+        history = self.datasource.history(exchange, symbol, start, end, period)
+        return history
+
+
+def data(datareader, exchange, symbol, start, end, period):
+    for history in datareader(exchange, symbol, start, end, period).iterrows():
+        yield history
