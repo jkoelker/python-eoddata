@@ -45,6 +45,9 @@ def cleanup(data):
 
 
 def timetastic(ts, tz=None):
+    if ts is None:
+        return ts
+
     ts = pd.to_datetime(ts)
 
     if tz is not None and (not hasattr(ts, 'tzinfo') or ts.tzinfo is None):
@@ -200,7 +203,7 @@ class PickleCache(CacheManager):
             # NOTE(jkoelker) String date indexing allows any time on the date
             history = cached_history.ix[str(start):str(end.date())]
 
-        if history:
+        if not history.empty:
             first_record = history.index[0]
             last_record = history.index[-1]
 
