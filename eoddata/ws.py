@@ -13,6 +13,14 @@ FIRST_CAP_RE = re.compile('(.)([A-Z][a-z]+)')
 ALL_CAP_RE = re.compile('([a-z0-9])([A-Z])')
 
 
+class Error(Exception):
+    pass
+
+
+class LoginError(Error):
+    pass
+
+
 def convert_date(date):
     if not date:
         return date
@@ -30,8 +38,8 @@ def require_login(f):
 
     @functools.wraps(f)
     def wrapper(self, *args, **kwargs):
-        if not self.token and not self.login():
-            return
+        if not self.token:
+            self.login()
 
         return f(self, *args, **kwargs)
 
@@ -103,7 +111,7 @@ class Client(object):
 
         result = success(obj, method)
         if not result:
-            return
+            raise Error(str(self.last_response))
 
         if processor:
             result = processor(result)
@@ -117,7 +125,7 @@ class Client(object):
         result = success(obj, method)
 
         if not result:
-            return
+            raise LoginError(str(self.last_response))
 
         self.token = result.Token
         return self.token
