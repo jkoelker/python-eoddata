@@ -17,10 +17,6 @@ class Error(Exception):
     pass
 
 
-class LoginError(Error):
-    pass
-
-
 def convert_date(date):
     if not date:
         return date
@@ -51,12 +47,12 @@ def success(obj, method):
     obj = getattr(obj, result)
 
     if not hasattr(obj, 'Message'):
-        return False
+        raise Error('No Message in object')
 
-    if 'success' in obj.Message.lower():
-        return obj
+    if 'success' not in obj.Message.lower():
+        raise Error(obj.Message)
 
-    return False
+    return obj
 
 
 def convert(value):
@@ -110,8 +106,6 @@ class Client(object):
         obj = self._get(method, Token=self.token, **kwargs)
 
         result = success(obj, method)
-        if not result:
-            raise Error(str(self.last_response))
 
         if processor:
             result = processor(result)
@@ -123,9 +117,6 @@ class Client(object):
         obj = self._get(method, Username=self.username, Password=self.password)
 
         result = success(obj, method)
-
-        if not result:
-            raise LoginError(str(self.last_response))
 
         self.token = result.Token
         return self.token
