@@ -232,9 +232,9 @@ class PickleCache(CacheManager):
                 search_end = end
 
             if last_record.date() < search_end.date():
+                new_history = self._history(exchange, symbol, last_record,
+                                            search_end, period)
                 if not new_history.empty:
-                    new_history = self._history(exchange, symbol, last_record,
-                                                search_end, period)
                     cached_history = cached_history.combine_first(new_history)
                     cached_history.to_pickle(filename)
                     history = history.combine_first(new_history)
