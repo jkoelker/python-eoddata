@@ -85,6 +85,10 @@ class Manager(object):
         end = timetastic(end, tz)
 
         history = self.client.history(exchange, symbol, start, end, period)
+
+        if not history:
+            return pd.DataFrame()
+
         history = pd.DataFrame.from_records(history, index='date_time')
 
         # NOTE(jkoelker) Sometimes we'll get an extra period back
@@ -184,6 +188,9 @@ class PickleCache(CacheManager):
         if not self._can_haz_cache(key):
             history = self._history(exchange, symbol, start, end, period)
 
+            if history.empty:
+                return history
+
             if os.path.exists(filename):
                 cached_history = pd.read_pickle(filename)
                 cached_history.combine_first(history).to_pickle(filename)
@@ -211,10 +218,12 @@ class PickleCache(CacheManager):
             if start.date() < first_record.date():
                 new_history = self._history(exchange, symbol, start,
                                             first_record, period)
-                cached_history = cached_history.combine_first(new_history)
-                cached_history.to_pickle(filename)
 
-                history = history.combine_first(new_history)
+                if not new_history.empty:
+                    cached_history = cached_history.combine_first(new_history)
+                    cached_history.to_pickle(filename)
+
+                    history = history.combine_first(new_history)
 
             if end is None:
                 search_end = timetastic(pd.datetime.now(), tz)
@@ -223,11 +232,12 @@ class PickleCache(CacheManager):
                 search_end = end
 
             if last_record.date() < search_end.date():
-                new_history = self._history(exchange, symbol, last_record,
-                                            search_end, period)
-                cached_history = cached_history.combine_first(new_history)
-                cached_history.to_pickle(filename)
-                history = history.combine_first(new_history)
+                if not new_history.empty:
+                    new_history = self._history(exchange, symbol, last_record,
+                                                search_end, period)
+                    cached_history = cached_history.combine_first(new_history)
+                    cached_history.to_pickle(filename)
+                    history = history.combine_first(new_history)
 
         return history
 
