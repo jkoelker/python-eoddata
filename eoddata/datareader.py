@@ -61,7 +61,7 @@ class Manager(object):
         self.client = client
 
     def _last_trade_date(self, exchange, expiration='1d'):
-        exchanges = self.exchanges(epiration=expiration)
+        exchanges = self.exchanges(expiration=expiration)
         return exchanges[exchange]['last_trade_date_time']
 
     def exchange_tz(self, exchange, exchanges=None):
