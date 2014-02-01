@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import logging
 
 import pandas as pd
 import pytz
@@ -8,6 +9,9 @@ from tzlocal import windows_tz
 
 import appdirs
 import ws
+
+
+LOG = logging.getLogger(__name__)
 
 
 _TYPE_MAP = {'integer': int,
@@ -72,6 +76,7 @@ class Manager(object):
         return pytz.timezone(windows_tz.tz_names[exchange_tz])
 
     def exchanges(self, expiration='1d'):
+        LOG.info("Getting Exchanges")
         exchanges = self.client.exchanges()
         for exchange in exchanges:
             exchange_tz = self.exchange_tz(exchange, exchanges=exchanges)
@@ -81,6 +86,7 @@ class Manager(object):
         return pd.DataFrame(exchanges)
 
     def symbols(self, exchange, expiration='1d'):
+        LOG.info("Getting Symbols for exchange %s" % exchange)
         return pd.DataFrame(self.client.symbols(exchange))
 
     def history(self, exchange, symbol, start, end=None, period='d'):
@@ -93,6 +99,8 @@ class Manager(object):
         if end > exchange_end:
             end = exchange_end
 
+        LOG.info("Getting History for %s:%s from %s to %s" % (exchange, symbol,
+                                                              start, end))
         history = self.client.history(exchange, symbol, start, end, period)
 
         if not history:
