@@ -88,7 +88,7 @@ class Manager(object):
         start = timetastic(start, tz)
         end = timetastic(end, tz)
 
-        exchange_end = self._last_trde_date(exchange)
+        exchange_end = self._last_trade_date(exchange)
 
         if end > exchange_end:
             end = exchange_end
@@ -194,7 +194,7 @@ class PickleCache(CacheManager):
         key = self._get_key('history', exchange, symbol, period_key)
         filename = self._get_file(key)
 
-        exchange_end = self._last_trde_date(exchange)
+        exchange_end = self._last_trade_date(exchange)
 
         if end is not None and end > exchange_end:
             end = exchange_end
