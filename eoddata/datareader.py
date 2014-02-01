@@ -60,6 +60,10 @@ class Manager(object):
     def __init__(self, client):
         self.client = client
 
+    def _last_trade_date(self, exchange, expiration='1d'):
+        exchanges = self.exchanges(epiration=expiration)
+        return exchanges[exchange]['last_trade_date_time']
+
     def exchange_tz(self, exchange, exchanges=None):
         # NOTE(jkoelker) EODData's service is windows based, convert times here
         if exchanges is None:
@@ -83,6 +87,11 @@ class Manager(object):
         tz = self.exchange_tz(exchange)
         start = timetastic(start, tz)
         end = timetastic(end, tz)
+
+        exchange_end = self._last_trde_date(exchange)
+
+        if end > exchange_end:
+            end = exchange_end
 
         history = self.client.history(exchange, symbol, start, end, period)
 
@@ -184,6 +193,11 @@ class PickleCache(CacheManager):
         period_key = 'period_%s' % period
         key = self._get_key('history', exchange, symbol, period_key)
         filename = self._get_file(key)
+
+        exchange_end = self._last_trde_date(exchange)
+
+        if end is not None and end > exchange_end:
+            end = exchange_end
 
         if not self._can_haz_cache(key):
             history = self._history(exchange, symbol, start, end, period)
