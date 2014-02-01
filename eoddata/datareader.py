@@ -90,6 +90,11 @@ class Manager(object):
         return pd.DataFrame(self.client.symbols(exchange))
 
     def history(self, exchange, symbol, start, end=None, period='d'):
+        symbols = self.symbols(exchange)
+
+        if symbol not in symbols:
+            return pd.DataFrame()
+
         tz = self.exchange_tz(exchange)
         start = timetastic(start, tz)
         end = timetastic(end, tz)
