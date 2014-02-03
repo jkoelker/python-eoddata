@@ -271,7 +271,11 @@ class PickleCache(CacheManager):
 
 class DataReader(object):
     def __init__(self, username, password, cache=None):
-        client = ws.Client(username, password)
+        client = None
+
+        if cache and not isinstance(cache, Manager):
+            client = ws.Client(username, password)
+
         self.datasource = None
 
         if not cache:
